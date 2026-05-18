@@ -116,8 +116,9 @@ class PortfolioApp:
         # Ticker rows container
         ticker_region = tk.Frame(self.ctrl, bg=PALETTE["surface"])
         ticker_region.grid(row=4, column=0, sticky="nsew", padx=18)
-        self.ctrl.rowconfigure(4, weight=1)
+        self.ctrl.rowconfigure(4, weight=0)
         ticker_region.columnconfigure(0, weight=1)
+        ticker_region.rowconfigure(0, weight=0)
 
         self.ticker_canvas = tk.Canvas(
             ticker_region,
@@ -125,9 +126,9 @@ class PortfolioApp:
             bd=0,
             highlightthickness=0,
             relief="flat",
-            height=220,
+            height=1,
         )
-        self.ticker_canvas.grid(row=0, column=0, sticky="nsew")
+        self.ticker_canvas.grid(row=0, column=0, sticky="ew")
 
         self.ticker_scroll = ttk.Scrollbar(
             ticker_region,
@@ -139,19 +140,33 @@ class PortfolioApp:
         self.ticker_canvas.configure(yscrollcommand=self.ticker_scroll.set)
 
         self.ticker_frame = tk.Frame(self.ticker_canvas, bg=PALETTE["surface"])
-        self.ticker_canvas.create_window((0, 0), window=self.ticker_frame, anchor="nw")
+        self.ticker_window = self.ticker_canvas.create_window(
+            (0, 0), window=self.ticker_frame, anchor="nw"
+        )
         self.ticker_rows: List[TickerRow] = []
 
         def _update_ticker_scrollregion(event: tk.Event) -> None:
             bbox = self.ticker_canvas.bbox("all")
             if bbox:
-                # Constrain scroll to show at most 4 ticker rows
-                max_height = 4 * 30  # ~30px per row
-                canvas_height = min(bbox[3] - bbox[1], max_height)
-                self.ticker_canvas.configure(scrollregion=(bbox[0], bbox[1], bbox[2], bbox[1] + canvas_height))
+                max_visible_rows = 3
+                row_height = max(event.height // max(len(self.ticker_rows), 1), 1)
+                canvas_height = min(event.height, row_height * max_visible_rows)
+                self.ticker_canvas.configure(
+                    height=canvas_height,
+                    scrollregion=bbox,
+                )
+                self.ticker_canvas.yview_moveto(0.0)
+                if len(self.ticker_rows) > max_visible_rows:
+                    self.ticker_scroll.grid()
+                else:
+                    self.ticker_scroll.grid_remove()
             else:
                 self.ticker_canvas.configure(scrollregion=self.ticker_canvas.bbox("all"))
         self.ticker_frame.bind("<Configure>", _update_ticker_scrollregion)
+
+        def _resize_ticker_window(event: tk.Event) -> None:
+            self.ticker_canvas.itemconfigure(self.ticker_window, width=event.width)
+        self.ticker_canvas.bind("<Configure>", _resize_ticker_window)
 
         # Add-ticker button
         tk.Button(
