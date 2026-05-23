@@ -84,6 +84,15 @@ class TickerRow:
         """Return (ticker_uppercase, allocation_string)."""
         return self.ticker_var.get().strip().upper(), self.alloc_var.get().strip()
 
+    def widgets(self) -> Tuple[tk.Widget, ...]:
+        """Return every widget owned by this row."""
+        return (
+            self.ticker_entry,
+            self.alloc_entry,
+            self.pct_lbl,
+            self.remove_btn,
+        )
+
     def regrid(self, new_index: int) -> None:
         """Move all widgets to a new grid row after a sibling is removed."""
         self.row = new_index

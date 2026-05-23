@@ -58,6 +58,7 @@ class PortfolioApp:
         self.analytics: Optional[PortfolioAnalytics] = None
         self.current_view: str = "portfolio"
         self.latest_stats: Optional[Dict] = None
+        self.latest_ticker_stats: Dict[str, Dict] = {}
         self.inception_date: Optional[date] = None
 
     # ── Window setup ──────────────────────────────────────────────────────────
@@ -144,29 +145,40 @@ class PortfolioApp:
             (0, 0), window=self.ticker_frame, anchor="nw"
         )
         self.ticker_rows: List[TickerRow] = []
+        self.max_visible_ticker_rows = 3
 
         def _update_ticker_scrollregion(event: tk.Event) -> None:
-            bbox = self.ticker_canvas.bbox("all")
-            if bbox:
-                max_visible_rows = 3
-                row_height = max(event.height // max(len(self.ticker_rows), 1), 1)
-                canvas_height = min(event.height, row_height * max_visible_rows)
+            if self.ticker_rows:
+                content_height = max(event.height, 1)
+                content_width = max(
+                    self.ticker_canvas.winfo_width(),
+                    event.width,
+                    1,
+                )
+                row_height = max(content_height // len(self.ticker_rows), 1)
+                canvas_height = min(
+                    content_height,
+                    row_height * self.max_visible_ticker_rows,
+                )
                 self.ticker_canvas.configure(
                     height=canvas_height,
-                    scrollregion=bbox,
+                    scrollregion=(0, 0, content_width, content_height),
+                    yscrollincrement=row_height,
                 )
-                self.ticker_canvas.yview_moveto(0.0)
-                if len(self.ticker_rows) > max_visible_rows:
+                if len(self.ticker_rows) > self.max_visible_ticker_rows:
                     self.ticker_scroll.grid()
                 else:
                     self.ticker_scroll.grid_remove()
+                    self.ticker_canvas.yview_moveto(0.0)
             else:
-                self.ticker_canvas.configure(scrollregion=self.ticker_canvas.bbox("all"))
+                self.ticker_canvas.configure(scrollregion=(0, 0, 0, 0))
         self.ticker_frame.bind("<Configure>", _update_ticker_scrollregion)
 
         def _resize_ticker_window(event: tk.Event) -> None:
             self.ticker_canvas.itemconfigure(self.ticker_window, width=event.width)
         self.ticker_canvas.bind("<Configure>", _resize_ticker_window)
+        self._bind_ticker_mousewheel(self.ticker_canvas)
+        self._bind_ticker_mousewheel(self.ticker_frame)
 
         # Add-ticker button
         tk.Button(
@@ -318,7 +330,7 @@ class PortfolioApp:
             wrap="none",
             bd=0,
             highlightthickness=0,
-            font=("Segoe UI", 10),
+            font=("Consolas", 10),
         )
         self.stats_text.grid(row=1, column=0, sticky="nsew")
         self.stats_text.grid_remove()
@@ -347,6 +359,32 @@ class PortfolioApp:
 
     # ── Ticker-row management ─────────────────────────────────────────────────
 
+    def _bind_ticker_mousewheel(self, widget: tk.Widget) -> None:
+        """Route mouse-wheel events over ticker widgets to the ticker canvas."""
+        widget.bind("<MouseWheel>", self._on_ticker_mousewheel, add="+")
+        widget.bind("<Button-4>", lambda event: self._on_ticker_mousewheel(event, -1), add="+")
+        widget.bind("<Button-5>", lambda event: self._on_ticker_mousewheel(event, 1), add="+")
+
+    def _on_ticker_mousewheel(
+        self,
+        event: tk.Event,
+        units: Optional[int] = None,
+    ) -> str:
+        """Scroll the ticker list by mouse wheel while respecting its limits."""
+        if units is None:
+            if event.delta == 0:
+                return "break"
+            units = -1 if event.delta > 0 else 1
+
+        first, last = self.ticker_canvas.yview()
+        if first <= 0.0 and units < 0:
+            return "break"
+        if last >= 1.0 and units > 0:
+            return "break"
+
+        self.ticker_canvas.yview_scroll(units, "units")
+        return "break"
+
     def _add_ticker_row(self, ticker: str = "", alloc: str = "0") -> None:
         """Add one TickerRow widget to the input grid."""
         row_idx = len(self.ticker_rows)
@@ -359,6 +397,8 @@ class PortfolioApp:
         tr.ticker_var.set(ticker)
         tr.alloc_var.set(alloc)
         tr.alloc_var.trace_add("write", lambda *_: self._update_alloc_label())
+        for widget in tr.widgets():
+            self._bind_ticker_mousewheel(widget)
 
         self.ticker_rows.append(tr)
         self._update_alloc_label()
@@ -490,13 +530,14 @@ class PortfolioApp:
                     transaction_cost_rate=REBALANCE_COST_RATE,
                 )
                 stats = analytics.compute_stats()
+                ticker_stats = analytics.compute_ticker_stats()
             except ValueError as exc:
                 message = str(exc)
                 self.root.after(0, lambda msg=message: self._on_analysis_error(msg))
                 return
 
             self.root.after(
-                0, lambda: self._on_analysis_complete(analytics, stats, failed)
+                0, lambda: self._on_analysis_complete(analytics, stats, ticker_stats, failed)
             )
 
         threading.Thread(target=worker, daemon=True).start()
@@ -624,10 +665,12 @@ class PortfolioApp:
         self,
         analytics: PortfolioAnalytics,
         stats: Dict,
+        ticker_stats: Dict[str, Dict],
         failed: List[str],
     ) -> None:
         self.analytics = analytics
         self.latest_stats = stats
+        self.latest_ticker_stats = ticker_stats
         self.run_btn.config(state="normal")
         self.max_btn.config(state="normal")
         self.status_var.set("✔ Analysis complete")
@@ -643,7 +686,7 @@ class PortfolioApp:
         self._rebuild_tab_bar()
         self._switch_view("portfolio")
 
-    def _render_stats_text(self) -> None:
+    def _render_stats_text_legacy(self) -> None:
         self.stats_text.config(state="normal")
         self.stats_text.delete("1.0", "end")
 
@@ -690,6 +733,149 @@ class PortfolioApp:
         self.stats_text.config(state="disabled")
 
     # ── View switcher ─────────────────────────────────────────────────────────
+
+    def _render_stats_text(self) -> None:
+        """Render the statistics tab as a structured, table-like report."""
+        self.stats_text.config(state="normal")
+        self.stats_text.delete("1.0", "end")
+        self.stats_text.tag_configure("title", foreground=PALETTE["accent"], font=("Consolas", 13, "bold"))
+        self.stats_text.tag_configure("section", foreground=PALETTE["accent2"], font=("Consolas", 11, "bold"))
+        self.stats_text.tag_configure("dim", foreground=PALETTE["text_dim"])
+        self.stats_text.tag_configure("good", foreground=PALETTE["accent2"])
+        self.stats_text.tag_configure("bad", foreground=PALETTE["danger"])
+        self.stats_text.tag_configure("warn", foreground=PALETTE["warn"])
+
+        if self.latest_stats is None or self.analytics is None:
+            self.stats_text.insert("end", "Run analysis to view portfolio statistics.")
+            self.stats_text.config(state="disabled")
+            return
+
+        s = self.latest_stats
+
+        def pct(value: float, signed: bool = True) -> str:
+            sign = "+" if signed else ""
+            return f"{value * 100:{sign}.2f}%"
+
+        def num(value: float) -> str:
+            return f"{value:+.2f}"
+
+        def value_tag(value: float) -> str:
+            if abs(value) < 1e-12:
+                return "dim"
+            return "good" if value > 0 else "bad"
+
+        def write(text: str = "", tag: Optional[str] = None) -> None:
+            self.stats_text.insert("end", text + "\n", tag)
+
+        def section(title: str) -> None:
+            write("")
+            write(title, "section")
+            write("-" * len(title), "dim")
+
+        def metric_table(rows: List[Tuple[str, str, str, Optional[str]]]) -> None:
+            label_w = max(len(row[0]) for row in rows)
+            value_w = max(len(row[1]) for row in rows)
+            for label, value, note, tag in rows:
+                self.stats_text.insert("end", f"{label:<{label_w}}  ")
+                self.stats_text.insert("end", f"{value:>{value_w}}  ", tag)
+                self.stats_text.insert("end", note + "\n", "dim")
+
+        rebalance = s.get("rebalance_period_days")
+        rebalance_text = (
+            f"Every {rebalance} trading days"
+            if rebalance
+            else "Buy and hold, no periodic rebalance"
+        )
+        period = (
+            f"{s['start_date'].strftime('%Y-%m-%d')} -> "
+            f"{s['end_date'].strftime('%Y-%m-%d')}"
+        )
+
+        write("PORTFOLIO STATISTICS", "title")
+        write(f"Period: {period}  |  Trading days: {s['n_trading_days']}  |  Calendar days: {s['n_days']}", "dim")
+        write(f"Method: {rebalance_text}  |  Risk-free rate: {PortfolioAnalytics.RISK_FREE_RATE * 100:.2f}% annual", "dim")
+
+        section("Return")
+        metric_table([
+            ("Total return", pct(s["total_return"]), "End value vs starting value", value_tag(s["total_return"])),
+            ("CAGR", pct(s["cagr"]), "Geometric annualized return", value_tag(s["cagr"])),
+            ("Annualized daily mean", pct(s["annualized_return"]), "Arithmetic mean daily return x 252", value_tag(s["annualized_return"])),
+            ("Average daily", pct(s["avg_daily_return"]), "Mean daily return", value_tag(s["avg_daily_return"])),
+            ("Median daily", pct(s["median_daily_return"]), "Middle daily return", value_tag(s["median_daily_return"])),
+        ])
+
+        section("Risk")
+        metric_table([
+            ("Volatility", pct(s["volatility"], signed=False), "Annualized standard deviation", "warn"),
+            ("Downside volatility", pct(s["downside_volatility"], signed=False), "Annualized negative excess-return deviation", "warn"),
+            ("Max drawdown", pct(s["max_drawdown"]), f"{s['drawdown_start']} -> {s['drawdown_end']}", "bad"),
+            (
+                "Longest underwater",
+                f"{s['longest_drawdown_days']} days",
+                f"{s['longest_drawdown_start']} -> {s['longest_drawdown_end']}",
+                "warn",
+            ),
+            ("Ulcer index", f"{s['ulcer_index']:.2f}", "Depth and duration of drawdowns", "warn"),
+            ("VaR 95%", pct(s["var_95"]), "Daily 5th percentile loss threshold", "bad"),
+            ("CVaR 95%", pct(s["cvar_95"]), "Average daily return in the worst 5%", "bad"),
+        ])
+
+        section("Risk-Adjusted")
+        metric_table([
+            ("Sharpe", num(s["sharpe"]), "Excess return per unit of volatility", value_tag(s["sharpe"])),
+            ("Sortino", num(s["sortino"]), "Excess return per unit of downside volatility", value_tag(s["sortino"])),
+            ("Calmar", num(s["calmar"]), "CAGR divided by absolute max drawdown", value_tag(s["calmar"])),
+        ])
+
+        section("Daily Behavior")
+        metric_table([
+            ("Best day", pct(s["best_day"]), str(s["best_day_date"]), "good"),
+            ("Worst day", pct(s["worst_day"]), str(s["worst_day_date"]), "bad"),
+            ("Win rate", pct(s["win_rate"], signed=False), f"{s['positive_days']} up / {s['negative_days']} down / {s['flat_days']} flat", value_tag(s["win_rate"] - 0.5)),
+            ("Skew", num(s["skew"]), "Positive means larger right-tail returns", value_tag(s["skew"])),
+            ("Excess kurtosis", num(s["kurtosis"]), "Higher means fatter daily-return tails", "warn"),
+        ])
+
+        section("Allocation Drift")
+        write(f"{'Ticker':<10} {'Start':>10} {'Final':>10} {'Drift':>10}", "dim")
+        write(f"{'-' * 10:<10} {'-' * 10:>10} {'-' * 10:>10} {'-' * 10:>10}", "dim")
+        final_allocations = s.get("final_allocations", {})
+        for ticker in self.analytics.price_df.columns:
+            start_alloc = self.analytics.weights.get(ticker, 0.0)
+            end_alloc = final_allocations.get(ticker, 0.0)
+            drift = end_alloc - start_alloc
+            write(
+                f"{ticker:<10} {pct(start_alloc, signed=False):>10} "
+                f"{pct(end_alloc, signed=False):>10} {pct(drift):>10}"
+            )
+        write(f"Transaction cost drag: {s.get('rebalance_cost', 0.0) * 100:.4f}% of initial portfolio value", "dim")
+
+        section("Ticker Comparison")
+        header = (
+            f"{'Ticker':<8} {'Return':>10} {'CAGR':>10} {'Vol':>10} "
+            f"{'Max DD':>10} {'Sharpe':>8} {'Win':>8} {'VaR95':>9}"
+        )
+        write(header, "dim")
+        write("-" * len(header), "dim")
+        for ticker, ts in self.latest_ticker_stats.items():
+            write(
+                f"{ticker:<8} {pct(ts['total_return']):>10} {pct(ts['cagr']):>10} "
+                f"{pct(ts['volatility'], signed=False):>10} {pct(ts['max_drawdown']):>10} "
+                f"{num(ts['sharpe']):>8} {pct(ts['win_rate'], signed=False):>8} {pct(ts['var_95']):>9}"
+            )
+
+        section("Correctness Notes")
+        notes = [
+            "Total return and CAGR are calculated from the normalized portfolio value series.",
+            "Volatility uses sample standard deviation of daily returns annualized by sqrt(252).",
+            "Sharpe and Sortino use a 4.00% annual risk-free rate converted to a daily rate.",
+            "Max drawdown is the worst peak-to-trough decline; dates show the peak and trough.",
+            "Transaction costs are deducted during simulated rebalances before new target holdings are set.",
+        ]
+        for note in notes:
+            write(f"- {note}", "dim")
+
+        self.stats_text.config(state="disabled")
 
     def _rebuild_tab_bar(self) -> None:
         """Recreate tab buttons: portfolio, statistics, and one per ticker."""
