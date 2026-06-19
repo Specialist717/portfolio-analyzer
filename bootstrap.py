@@ -1,13 +1,8 @@
 """
-bootstrap.py
-------------
-Guarantees that every package listed in config.REQUIRED_PACKAGES is
-importable before the application starts.
+Ensure runtime dependencies are importable before the GUI starts.
 
-Strategies (tried in order):
-  A. uv-managed Python  → `uv pip install`
-  B. Standard Python    → `pip install --target _vendor/` (no admin rights needed)
-  C. Neither works      → print clear manual instructions and exit.
+Installation strategies are tried in order: uv-managed Python, the active
+virtual environment, then a local _vendor fallback.
 """
 
 import importlib
@@ -19,11 +14,9 @@ import sys
 
 from config import REQUIRED_PACKAGES
 
-# Local fallback vendor directory (used only by strategy B)
+# Local fallback vendor directory.
 _VENDOR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_vendor")
 
-
-# ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _is_uv_python() -> bool:
     """Return True when this interpreter is managed by uv."""
@@ -86,8 +79,6 @@ def _install_into_current_env(pip_names: list[str]) -> bool:
     return False
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
-
 def ensure_packages() -> None:
     """
     Check for missing packages and install them automatically.
@@ -106,11 +97,11 @@ def ensure_packages() -> None:
     pip_names = [pip for _, pip in missing]
     print(f"[boot] Missing packages: {', '.join(pip_names)}")
 
-    # ── Strategy A: uv pip install ────────────────────────────────────────
+    # Strategy A: uv-managed Python.
     if _is_uv_python():
         uv = _uv_executable()
         if uv:
-            print("[boot] uv-managed Python detected — using `uv pip install` …")
+            print("[boot] uv-managed Python detected - using `uv pip install` ...")
             if _run([uv, "pip", "install"] + pip_names):
                 importlib.invalidate_caches()
                 _patch_sys_path()
@@ -123,15 +114,15 @@ def ensure_packages() -> None:
             "\n[boot] Could not install automatically into a uv-managed Python.\n"
             "Please run ONE of the following commands, then re-run this script:\n\n"
             f"    uv pip install {' '.join(pip_names)}\n\n"
-            "  — or —\n\n"
+            "  - or -\n\n"
             f"    {sys.executable} -m pip install {' '.join(pip_names)}\n"
         )
         sys.exit(1)
 
-    # ── Strategy B: pip install into the current virtual environment ─────
+    # Strategy B: active virtual environment.
     in_venv = bool(os.environ.get("VIRTUAL_ENV")) or "venv" in sys.executable.lower() or "env" in sys.executable.lower()
     if in_venv:
-        print("[boot] Virtual environment detected — using current environment pip install.")
+        print("[boot] Virtual environment detected - using current environment pip install.")
         if _install_into_current_env(pip_names):
             still_missing = [i for i, _ in missing if not _can_import(i)]
             if not still_missing:
@@ -139,12 +130,12 @@ def ensure_packages() -> None:
                 return
             print("[boot] Some packages still could not be imported after install; falling back to local vendor install.")
 
-    # ── Strategy C: pip install --target _vendor/ ─────────────────────────
+    # Strategy C: local vendor directory.
     print(f"[boot] Installing into local vendor dir: {_VENDOR_DIR}")
     os.makedirs(_VENDOR_DIR, exist_ok=True)
 
     for imp_name, pip_name in missing:
-        print(f"[boot]   {pip_name} …", end=" ", flush=True)
+        print(f"[boot]   {pip_name} ...", end=" ", flush=True)
         ok = _run([
             sys.executable, "-m", "pip", "install", pip_name,
             "--target", _VENDOR_DIR,

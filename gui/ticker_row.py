@@ -1,11 +1,4 @@
-"""
-gui/ticker_row.py
------------------
-TickerRow — one row in the portfolio-input grid.
-
-Contains: ticker entry field, allocation entry field, a '%' label,
-and a remove button.
-"""
+"""Reusable ticker/allocation input row."""
 
 from __future__ import annotations
 
@@ -28,7 +21,6 @@ class TickerRow:
         self.parent = parent_frame
         self.row = row_index
 
-        # Ticker entry
         self.ticker_var = tk.StringVar()
         self.ticker_entry = ttk.Entry(
             parent_frame,
@@ -40,7 +32,6 @@ class TickerRow:
             row=row_index, column=0, padx=(0, 6), pady=3, sticky="ew"
         )
 
-        # Allocation entry
         self.alloc_var = tk.StringVar(value="0")
         self.alloc_entry = ttk.Entry(
             parent_frame,
@@ -53,7 +44,6 @@ class TickerRow:
             row=row_index, column=1, padx=(0, 6), pady=3, sticky="ew"
         )
 
-        # Percentage label
         self.pct_lbl = tk.Label(
             parent_frame,
             text="%",
@@ -63,7 +53,6 @@ class TickerRow:
         )
         self.pct_lbl.grid(row=row_index, column=2, padx=(0, 10))
 
-        # Remove button
         self.remove_btn = tk.Button(
             parent_frame,
             text="✕",
@@ -77,8 +66,6 @@ class TickerRow:
             font=("Segoe UI", 11),
         )
         self.remove_btn.grid(row=row_index, column=3, pady=3)
-
-    # ── Public API ────────────────────────────────────────────────────────────
 
     def get_values(self) -> Tuple[str, str]:
         """Return (ticker_uppercase, allocation_string)."""

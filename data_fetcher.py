@@ -1,13 +1,4 @@
-"""
-data_fetcher.py
----------------
-DataFetcher — thin wrapper around yfinance.
-
-Responsibilities
-----------------
-- Download adjusted-close price series for a list of tickers.
-- Return the earliest common date across all tickers (inception date).
-"""
+"""Yahoo Finance data access helpers."""
 
 from __future__ import annotations
 
@@ -106,5 +97,5 @@ class DataFetcher:
         if not first_dates:
             return None
 
-        # Portfolio can only start when ALL tickers have data
+        # The common inception date is the latest first-available ticker date.
         return max(first_dates)
