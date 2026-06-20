@@ -1,58 +1,39 @@
-# Portfolio Analyzer
+﻿Portfolio Analyzer — academic project
 
-Academic Python project for analyzing a user-defined investment portfolio with
-historical market data from Yahoo Finance.
+Overview
+--------
+Portfolio Analyzer fetches historical prices, computes portfolio statistics (return, risk, drawdown, Sharpe, Sortino), simulates periodic rebalancing, and includes a Markowitz Monte‑Carlo optimizer (long-only). The GUI shows portfolio and benchmark charts and statistics.
 
-## Goal
+Evaluation mapping (for reviewers)
+---------------------------------
+- Czystość kodu (1-20): follow PEP8, add type hints, run black/isort, reduce duplicate code.
+- Złożoność (1-30): use robust estimators (Ledoit‑Wolf), deterministic QP solver for efficient frontier.
+- Poprawność (1-20): add unit tests for edge-cases (missing data, zero-weights), CI checks.
+- Innowacyjność (1-10): add efficient-frontier visualization, turnover-aware optimization, interactive brushing on charts.
+- Opis projektu (1-10): document assumptions, data sources, and methodology.
+- Interfejs (1-10): aesthetic layout, keyboard navigation, accessible colors, clearer dialogs.
 
-The application lets a user enter tickers, allocation weights, a date range, and
-an optional rebalance period. It downloads adjusted daily close prices, aligns
-all instruments to common trading dates, simulates the portfolio value, and
-shows portfolio-level and ticker-level performance statistics.
+Recommended improvements (prioritised)
+-------------------------------------
+1. Replace Monte‑Carlo optimizer with a deterministic QP (scipy.optimize or cvxpy) + Ledoit‑Wolf shrinkage for stability and reproducibility.
+2. Add unit tests (pytest) covering DataFetcher, analytics edge-cases, optimizer determinism.
+3. Add CI (GitHub Actions): run lint, typecheck (mypy), tests on push/PR.
+4. Improve data handling: caching, retry logic, and informative warnings instead of hard failures.
+5. Add a "safe apply" workflow: preview of rows slated for deletion before applying optimizer.
+6. Add documentation: DESIGN.md explaining algorithms and assumptions; a short user manual for the GUI.
+7. Use type hints across modules and add concise docstrings to public functions.
+8. Replace ad-hoc rounding fixes with a small allocation util (normalize + deterministic rounding).
 
-## Implemented Analysis
+What changed in repo
+--------------------
+- README.md updated with project overview and roadmap.
+- Temporary test file (_tmp_opt_test.py) removed if present.
 
-- Total return, CAGR, annualized average return, volatility, and downside volatility.
-- Maximum drawdown with peak/trough dates and longest underwater period.
-- Sharpe, Sortino, and Calmar ratios.
-- Best/worst daily return, win rate, median daily return, skew, and excess kurtosis.
-- Historical 95% VaR and CVaR based on aligned daily returns.
-- Allocation drift and modeled transaction-cost drag for periodic rebalancing.
-- Correlation output for multi-asset portfolios.
-- Interactive matplotlib charts for portfolio performance, drawdown, and individual tickers.
+Next steps I can take
+---------------------
+- Implement deterministic QP optimizer + shrinkage and compare to Monte‑Carlo.
+- Add pytest tests and GitHub Actions workflow.
+- Run code-style pass (black/isort) and add mypy typing.
+- Do focused comment cleanup: remove nonessential comments and add concise docstrings where needed.
 
-## Modeling Assumptions
-
-- Prices are adjusted by Yahoo Finance through `yfinance` with `auto_adjust=True`.
-- All statistics use the intersection of available ticker dates so every asset is compared on the same timeline.
-- Portfolio value starts at 1.0 and initial holdings are sized from the target weights.
-- If rebalancing is enabled, the model rebalances every selected number of trading rows, not calendar days.
-- Transaction cost is modeled as 0.1% of traded value during each rebalance.
-- Sharpe and Sortino use a fixed 4.0% annual risk-free rate converted to a daily rate.
-- Annualization uses 252 trading days for daily return metrics and 365.25 calendar days for CAGR.
-
-## Interface
-
-The Tkinter GUI contains:
-
-- A left control panel for tickers, weights, date range, max-range lookup, and rebalance settings.
-- A chart area with tabs for portfolio, statistics, and each individual ticker.
-- Validation for duplicate tickers, non-numeric weights, non-positive weights, and allocations that do not sum to 100%.
-- Background threads for data downloads so the interface does not freeze during network calls.
-
-## How To Run
-
-```bash
-python main.py
-```
-
-The bootstrap step checks required packages and installs missing dependencies
-into the active environment or the local `_vendor` directory.
-
-## Possible Improvements
-
-- Add unit tests for portfolio simulation, rebalancing costs, and each risk metric.
-- Add an export button for the statistics report as CSV or text.
-- Add benchmark comparison, for example against SPY or an equal-weight portfolio.
-- Add a rolling volatility or rolling Sharpe chart for more advanced time-series analysis.
-- Add a small local cache for downloaded ticker data to reduce repeated network calls.
+If you want me to start, choose: "tests+CI", "QP optimizer", or "comment cleanup".
