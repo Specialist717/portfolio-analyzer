@@ -302,3 +302,81 @@ class PortfolioAnalytics:
             ticker: self._return_stats(self.individual_value(ticker), self.RISK_FREE_RATE)
             for ticker in self.price_df.columns
         }
+
+    def markowitz_optimize(
+        self,
+        num_portfolios: int = 20000,
+        seed: Optional[int] = None,
+        allow_short: bool = False,
+    ) -> Dict:
+        """
+        Monte-Carlo Markowitz-style optimizer that searches for portfolio weights
+        maximizing the Sharpe ratio subject to constraints. When allow_short is False
+        weights are constrained to be non-negative and sum to 1 (no shorting).
+
+        Returns a dict with keys: weights (ticker->float), expected_annual_return,
+        annual_volatility, sharpe, num_portfolios.
+        """
+        prices_df = self.price_df
+        returns = self.returns_df
+        tickers = list(prices_df.columns)
+        if len(tickers) == 0:
+            raise ValueError("No price data available for optimization.")
+
+        n = len(tickers)
+        mu_daily = returns.mean()
+        mu_ann = mu_daily * 252
+        cov_ann = returns.cov() * 252
+        rf = float(self.RISK_FREE_RATE)
+
+        rng = np.random.default_rng(seed)
+
+        best_sharpe = -np.inf
+        best_weights = None
+        best_ret = 0.0
+        best_vol = 0.0
+
+        # Sampling loop: Dirichlet for non-negative weights, normal+normalize when shorts allowed
+        if allow_short:
+            for _ in range(num_portfolios):
+                w = rng.normal(size=n)
+                # normalize to sum to 1 (may contain negatives)
+                s = float(np.sum(w))
+                if s == 0:
+                    continue
+                w = w / s
+                ret = float(np.dot(w, mu_ann.values))
+                vol = float(np.sqrt(w @ cov_ann.values @ w))
+                if vol <= 0 or not np.isfinite(vol):
+                    continue
+                sharpe = (ret - rf) / vol
+                if sharpe > best_sharpe:
+                    best_sharpe = sharpe
+                    best_weights = w.copy()
+                    best_ret = ret
+                    best_vol = vol
+        else:
+            for _ in range(num_portfolios):
+                w = rng.dirichlet(np.ones(n))
+                ret = float(np.dot(w, mu_ann.values))
+                vol = float(np.sqrt(w @ cov_ann.values @ w))
+                if vol <= 0 or not np.isfinite(vol):
+                    continue
+                sharpe = (ret - rf) / vol
+                if sharpe > best_sharpe:
+                    best_sharpe = sharpe
+                    best_weights = w.copy()
+                    best_ret = ret
+                    best_vol = vol
+
+        if best_weights is None:
+            raise ValueError("Optimization failed to find a valid portfolio.")
+
+        result_weights = {tickers[i]: float(best_weights[i]) for i in range(n)}
+        return {
+            "weights": result_weights,
+            "expected_annual_return": float(best_ret),
+            "annual_volatility": float(best_vol),
+            "sharpe": float(best_sharpe),
+            "num_portfolios": int(num_portfolios),
+        }

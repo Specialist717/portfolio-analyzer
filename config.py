@@ -34,6 +34,8 @@ REBALANCE_PERIOD_OPTIONS: list[str] = ["30", "60", "90", "180", "365"]
 DEFAULT_REBALANCE_PERIOD: str = "30"
 REBALANCE_COST_RATE: float = 0.001  # 0.1% of traded value.
 
+DEFAULT_BENCHMARK: str = "SPY"
+
 DEFAULT_HOLDINGS: list[tuple[str, str]] = [
     ("SPY", "60"),
     ("QQQ", "25"),

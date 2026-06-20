@@ -22,6 +22,7 @@ from config import (
     REBALANCE_PERIOD_OPTIONS,
     DEFAULT_REBALANCE_PERIOD,
     REBALANCE_COST_RATE,
+    DEFAULT_BENCHMARK,
 )
 from data_fetcher import DataFetcher
 from gui import charts
@@ -45,6 +46,9 @@ class PortfolioApp:
         self.latest_stats: Optional[Dict] = None
         self.latest_ticker_stats: Dict[str, Dict] = {}
         self.inception_date: Optional[date] = None
+        # Benchmark settings (optional)
+        self.benchmark_prices = None
+        self.benchmark_ticker: Optional[str] = None
 
     def _configure_root(self) -> None:
         self.root.title("Portfolio Analyzer")
@@ -251,22 +255,69 @@ class PortfolioApp:
 
         self._hsep(13)
 
+        tk.Label(self.ctrl, text="BENCHMARK", bg=PALETTE["surface"],
+                 fg=PALETTE["text_dim"], font=("Segoe UI", 9, "bold"),
+                 ).grid(row=14, column=0, sticky="w", **pad, pady=(8, 4))
+
+        benchmark_frame = tk.Frame(self.ctrl, bg=PALETTE["surface"])
+        benchmark_frame.grid(row=15, column=0, sticky="ew", padx=18)
+        benchmark_frame.columnconfigure(1, weight=1)
+
+        self.benchmark_var = tk.BooleanVar(value=False)
+        self.benchmark_check = ttk.Checkbutton(
+            benchmark_frame,
+            text="Show benchmark",
+            variable=self.benchmark_var,
+            command=self._on_benchmark_toggle,
+            style="Dark.TCheckbutton",
+        )
+        self.benchmark_check.grid(row=0, column=0, sticky="w")
+
+        self.benchmark_ticker_var = tk.StringVar(value=DEFAULT_BENCHMARK)
+        self.benchmark_entry = ttk.Entry(
+            benchmark_frame, textvariable=self.benchmark_ticker_var, width=9, style="Dark.TEntry"
+        )
+        self.benchmark_entry.grid(row=0, column=1, sticky="e", padx=(8, 0))
+        self.benchmark_entry.config(state="disabled")
+
+        tk.Label(self.ctrl, text="ACTIONS", bg=PALETTE["surface"],
+                 fg=PALETTE["text_dim"], font=("Segoe UI", 9, "bold"),
+                 ).grid(row=16, column=0, sticky="w", **pad, pady=(10, 4))
+
+        actions_frame = tk.Frame(self.ctrl, bg=PALETTE["surface"])
+        actions_frame.grid(row=17, column=0, sticky="ew", padx=18)
+        actions_frame.columnconfigure(0, weight=1)
+
+        self.optimize_btn = tk.Button(
+            actions_frame, text="⚖  OPTIMIZE",
+            command=self._run_optimization,
+            bg=PALETTE["surface2"], fg=PALETTE["accent2"],
+            activebackground=PALETTE["border"], activeforeground=PALETTE["accent2"],
+            bd=0, cursor="hand2", font=("Segoe UI", 11), pady=8,
+        )
+        self.optimize_btn.grid(row=0, column=0, sticky="ew")
+        # Ensure optimize button is enabled by default (guard against state leftover from other flows)
+        try:
+            self.optimize_btn.config(state="normal")
+        except Exception:
+            pass
+
         self.run_btn = tk.Button(
-            self.ctrl, text="▶  RUN ANALYSIS",
+            actions_frame, text="▶  RUN ANALYSIS",
             command=self._run_analysis,
             bg=PALETTE["accent"], fg="#ffffff",
             activebackground="#3a70d4", activeforeground="#ffffff",
             bd=0, cursor="hand2", font=("Segoe UI", 12, "bold"), pady=10,
         )
-        self.run_btn.grid(row=14, column=0, sticky="ew", padx=18, pady=(14, 0))
+        self.run_btn.grid(row=1, column=0, sticky="ew", pady=(8, 0))
 
         self.status_var = tk.StringVar(value="")
         tk.Label(self.ctrl, textvariable=self.status_var,
                  bg=PALETTE["surface"], fg=PALETTE["text_dim"],
                  font=("Segoe UI", 9), anchor="center",
-                 ).grid(row=15, column=0, pady=(4, 0))
+                 ).grid(row=18, column=0, pady=(8, 0))
 
-        self._hsep(16)
+        self._hsep(19)
 
 
     def _build_chart_area(self) -> None:
@@ -453,8 +504,34 @@ class PortfolioApp:
         if self.rebalance_var.get() and rebalance_days is None:
             return
 
+        # Check whether user requested a benchmark
+        benchmark_ticker = None
+        if getattr(self, "benchmark_var", None) and self.benchmark_var.get():
+            benchmark_ticker = self.benchmark_ticker_var.get().strip().upper()
+            if not benchmark_ticker:
+                benchmark_ticker = None
+
+        # Delegate to the shared worker which handles threading and UI state.
+        self._start_analysis_worker(tickers, weights, start_dt, end_dt, rebalance_days, benchmark_ticker)
+
+    def _start_analysis_worker(
+        self,
+        tickers: List[str],
+        weights: Dict[str, float],
+        start_dt: date,
+        end_dt: date,
+        rebalance_days: Optional[int],
+        benchmark_ticker: Optional[str],
+    ) -> None:
+        """Run the analysis worker given explicit tickers/weights and date range.
+        This bypasses _parse_entries validation and is used after applying optimized allocations.
+        """
         self.run_btn.config(state="disabled")
         self.max_btn.config(state="disabled")
+        try:
+            self.optimize_btn.config(state="disabled")
+        except Exception:
+            pass
         self.status_var.set("⏳ Fetching market data …")
 
         def worker():
@@ -470,7 +547,7 @@ class PortfolioApp:
                 return
 
             # Re-normalize weights if Yahoo returns data for only part of the input.
-            available_weights = {t: weights[t] for t in prices}
+            available_weights = {t: weights.get(t, 0.0) for t in prices}
             w_sum = sum(available_weights.values())
             if w_sum == 0:
                 self.root.after(0, lambda: self._on_analysis_error(
@@ -493,8 +570,29 @@ class PortfolioApp:
                 self.root.after(0, lambda msg=message: self._on_analysis_error(msg))
                 return
 
+            # Optionally fetch benchmark (if requested and not present in the portfolio prices)
+            benchmark_series = None
+            bench_failed = []
+            if benchmark_ticker:
+                if benchmark_ticker in prices:
+                    benchmark_series = prices.get(benchmark_ticker)
+                else:
+                    try:
+                        bprices, bfailed = DataFetcher.fetch_prices(
+                            [benchmark_ticker],
+                            start=start_dt.strftime("%Y-%m-%d"),
+                            end=end_dt.strftime("%Y-%m-%d"),
+                        )
+                        benchmark_series = bprices.get(benchmark_ticker)
+                        if not benchmark_series:
+                            bench_failed = bfailed
+                    except Exception:
+                        bench_failed = [benchmark_ticker]
+                        benchmark_series = None
+
+            # Pass the actual weights used in the analysis so the UI can reflect them
             self.root.after(
-                0, lambda: self._on_analysis_complete(analytics, stats, ticker_stats, failed)
+                0, lambda: self._on_analysis_complete(analytics, stats, ticker_stats, failed, benchmark_series, benchmark_ticker, normalised)
             )
 
         threading.Thread(target=worker, daemon=True).start()
@@ -577,6 +675,68 @@ class PortfolioApp:
         state = "normal" if self.rebalance_var.get() else "disabled"
         self.rebalance_period_combo.config(state=state)
 
+    def _on_benchmark_toggle(self) -> None:
+        """Enable/disable benchmark entry and fetch benchmark if enabled."""
+        state = "normal" if self.benchmark_var.get() else "disabled"
+        try:
+            self.benchmark_entry.config(state=state)
+        except Exception:
+            pass
+
+        # If disabling, clear stored benchmark and redraw
+        if not self.benchmark_var.get():
+            self.benchmark_prices = None
+            self.benchmark_ticker = None
+            if self.analytics is not None:
+                self._switch_view("portfolio")
+            return
+
+        # If enabling and analytics already exists, fetch benchmark series
+        if self.analytics is None:
+            return
+
+        self.status_var.set("⏳ Fetching benchmark …")
+        self.run_btn.config(state="disabled")
+        try:
+            self.optimize_btn.config(state="disabled")
+        except Exception:
+            pass
+
+        benchmark_ticker = self.benchmark_ticker_var.get().strip().upper()
+
+        def worker():
+            try:
+                prices, failed = DataFetcher.fetch_prices(
+                    [benchmark_ticker],
+                    start=self.start_var.get(),
+                    end=self.end_var.get(),
+                )
+                series = prices.get(benchmark_ticker)
+            except Exception:
+                series = None
+                failed = [benchmark_ticker]
+            self.root.after(0, lambda: self._on_benchmark_fetched(series, benchmark_ticker if series is not None else None, failed))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_benchmark_fetched(self, series, ticker, failed):
+        self.run_btn.config(state="normal")
+        try:
+            self.optimize_btn.config(state="normal")
+        except Exception:
+            pass
+        self.max_btn.config(state="normal")
+        if series is None:
+            self.status_var.set("⚠ Could not fetch benchmark.")
+            messagebox.showwarning("Benchmark", f"Could not fetch benchmark data for {ticker}.", parent=self.root)
+            self.benchmark_prices = None
+            self.benchmark_ticker = None
+            return
+        self.benchmark_prices = series
+        self.benchmark_ticker = ticker
+        self.status_var.set("✔ Benchmark loaded")
+        self._switch_view("portfolio")
+
     def _parse_rebalance_period(self) -> Optional[int]:
         """Return the selected rebalance interval, or None when disabled/invalid."""
         if not self.rebalance_var.get():
@@ -623,14 +783,87 @@ class PortfolioApp:
         stats: Dict,
         ticker_stats: Dict[str, Dict],
         failed: List[str],
+        benchmark_series=None,
+        benchmark_ticker: Optional[str] = None,
+        used_weights: Optional[Dict[str, float]] = None,
     ) -> None:
         self.analytics = analytics
         self.latest_stats = stats
         self.latest_ticker_stats = ticker_stats
         self.run_btn.config(state="normal")
+        try:
+            self.optimize_btn.config(state="normal")
+        except Exception:
+            pass
         self.max_btn.config(state="normal")
         self.status_var.set("✔ Analysis complete")
 
+        # Store optional benchmark
+        self.benchmark_prices = benchmark_series
+        self.benchmark_ticker = benchmark_ticker
+
+        # Update UI: if some portfolio tickers failed, remove them and reflect the normalized weights
+        if failed:
+            # Filter to only portfolio tickers that appear in the current input grid
+            current_tickers = [tr.get_values()[0] for tr in self.ticker_rows]
+            portfolio_failures = [t for t in failed if t in current_tickers]
+            if portfolio_failures:
+                # Remove rows for failed tickers (reverse order to avoid reindexing issues)
+                indices_to_remove = [i for i, tr in enumerate(self.ticker_rows) if tr.get_values()[0] in portfolio_failures]
+                for idx in sorted(indices_to_remove, reverse=True):
+                    if len(self.ticker_rows) > 1:
+                        self._remove_ticker_row(idx)
+
+                # Reflect the actual weights used in the analysis when available
+                if used_weights:
+                    # used_weights are allocation fractions summing to 1.0 for available tickers
+                    pct_map = {t: round(float(w) * 100.0, 2) for t, w in used_weights.items()}
+                    # Correct rounding drift
+                    diff = round(100.0 - sum(pct_map.values()), 2)
+                    if abs(diff) >= 0.01 and pct_map:
+                        largest = max(used_weights.items(), key=lambda x: x[1])[0]
+                        pct_map[largest] = round(pct_map.get(largest, 0.0) + diff, 2)
+
+                    for tr in self.ticker_rows:
+                        t, _ = tr.get_values()
+                        if t in pct_map:
+                            tr.alloc_var.set(f"{pct_map[t]:.2f}")
+                else:
+                    # Fallback: renormalize existing allocations on-screen
+                    remaining = [tr.get_values() for tr in self.ticker_rows if tr.get_values()[0]]
+                    allocated = []
+                    for t, wstr in remaining:
+                        try:
+                            allocated.append((t, float(wstr)))
+                        except Exception:
+                            allocated.append((t, 0.0))
+                    total = sum(w for _, w in allocated)
+                    if total <= 0:
+                        n = len(allocated)
+                        pct = {t: round(100.0 / n, 2) for t, _ in allocated}
+                        rem = round(100.0 - sum(pct.values()), 2)
+                        if abs(rem) >= 0.01 and pct:
+                            first = allocated[0][0]
+                            pct[first] = round(pct[first] + rem, 2)
+                    else:
+                        normalized = {t: w / total for t, w in allocated}
+                        pct = {t: round(v * 100.0, 2) for t, v in normalized.items()}
+                        rem = round(100.0 - sum(pct.values()), 2)
+                        if abs(rem) >= 0.01:
+                            largest = max(normalized.items(), key=lambda x: x[1])[0]
+                            pct[largest] = round(pct.get(largest, 0.0) + rem, 2)
+                    for tr in self.ticker_rows:
+                        t, _ = tr.get_values()
+                        if t in pct:
+                            tr.alloc_var.set(f"{pct[t]:.2f}")
+
+                self._update_alloc_label()
+
+        # If benchmark fetching failed, do not treat that as a portfolio data failure.
+        if benchmark_ticker and benchmark_series is None:
+            self.status_var.set(f"⚠ Benchmark {benchmark_ticker} not available; omitted from chart.")
+
+        # Warn about any remaining portfolio data failures
         if failed:
             messagebox.showwarning(
                 "Ticker Warning",
@@ -642,6 +875,160 @@ class PortfolioApp:
         self._rebuild_tab_bar()
         self._switch_view("portfolio")
 
+    def _run_optimization(self) -> None:
+        """Fetch data and compute Markowitz-optimal weights (no shorting) in a background thread.
+
+        Optimization gathers tickers from the input grid and ignores the current
+        allocation values (they are used only for Run Analysis). This allows having
+        0% allocations present while still optimizing the universe of tickers.
+        """
+        # Gather tickers from input rows (allow zero allocations in the inputs)
+        tickers: List[str] = []
+        seen_tickers: set[str] = set()
+        for tr in self.ticker_rows:
+            t, _ = tr.get_values()
+            if not t:
+                continue
+            if t in seen_tickers:
+                messagebox.showerror(
+                    "Duplicate Ticker",
+                    f"'{t}' appears more than once.\nUse one row per ticker.",
+                    parent=self.root,
+                )
+                return
+            seen_tickers.add(t)
+            tickers.append(t)
+
+        if not tickers:
+            messagebox.showwarning("No Tickers", "Enter at least one ticker first.", parent=self.root)
+            return
+
+        start_dt, end_dt = self._parse_dates()
+        if start_dt is None:
+            return
+
+        self.run_btn.config(state="disabled")
+        try:
+            self.optimize_btn.config(state="disabled")
+        except Exception:
+            pass
+        self.max_btn.config(state="disabled")
+        self.status_var.set("⏳ Fetching market data for optimization …")
+
+        def worker():
+            try:
+                prices, failed = DataFetcher.fetch_prices(
+                    tickers,
+                    start=start_dt.strftime("%Y-%m-%d"),
+                    end=end_dt.strftime("%Y-%m-%d"),
+                )
+            except ValueError as exc:
+                message = str(exc)
+                self.root.after(0, lambda msg=message: self._on_analysis_error(msg))
+                return
+
+            if not prices:
+                self.root.after(0, lambda: self._on_analysis_error("No valid price data returned."))
+                return
+
+            try:
+                dummy_weights = {t: 1.0 / len(prices) for t in prices}
+                analytics = PortfolioAnalytics(prices, dummy_weights)
+                result = analytics.markowitz_optimize(num_portfolios=20000, allow_short=False)
+            except Exception as exc:
+                msg = str(exc)
+                self.root.after(0, lambda m=msg: self._on_analysis_error(m))
+                return
+
+            self.root.after(0, lambda: self._on_optimization_complete(result, failed))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_optimization_complete(self, result: Dict, failed: List[str]) -> None:
+        self.run_btn.config(state="normal")
+        try:
+            self.optimize_btn.config(state="normal")
+        except Exception:
+            pass
+        self.max_btn.config(state="normal")
+        self.status_var.set("✔ Optimization complete")
+
+        if failed:
+            messagebox.showwarning(
+                "Ticker Warning",
+                f"No data found for: {', '.join(failed)}.\nThey have been excluded from the optimization.",
+                parent=self.root,
+            )
+
+        weights = result.get("weights", {})
+        if not weights:
+            messagebox.showinfo("Optimization Result", "No suggested allocation found.")
+            return
+
+        lines = [f"{t}: {weights[t]*100:.2f}%" for t in sorted(weights)]
+        message = "Recommended allocations:\n\n" + "\n".join(lines)
+        apply = messagebox.askyesno("Optimization Complete", message + "\n\nApply these allocations to the input fields?")
+        if apply:
+            # Apply suggested allocations. Remove tickers with (near) zero weight.
+            zero_threshold = 1e-8
+            # Build mapping from current ticker rows to (index,tr)
+            mapping = {tr.get_values()[0]: (idx, tr) for idx, tr in enumerate(list(self.ticker_rows))}
+            # Suggested weights for tickers present in the grid
+            suggested = {t: float(weights.get(t, 0.0)) for t in mapping.keys()}
+            # Keep only positive weights
+            positive = {t: w for t, w in suggested.items() if w > zero_threshold}
+            if not positive:
+                messagebox.showinfo("Optimization Result", "Optimization suggests zero allocation for all current tickers. No changes applied.")
+            else:
+                # Normalize positive weights to sum to 1
+                total = sum(positive.values())
+                normalized = {t: (w / total) for t, w in positive.items()}
+                # Convert to percentages with 2 decimal rounding, adjust largest to fix rounding drift
+                pct = {t: round(normalized[t] * 100.0, 2) for t in normalized}
+                pct_total = sum(pct.values())
+                diff = round(100.0 - pct_total, 2)
+                if abs(diff) >= 0.01:
+                    largest = max(normalized.items(), key=lambda x: x[1])[0]
+                    pct[largest] = round(pct.get(largest, 0.0) + diff, 2)
+                # Apply percentages to current rows and mark zero rows for removal
+                indices_to_remove: list[int] = []
+                for idx, tr in enumerate(list(self.ticker_rows)):
+                    t, _ = tr.get_values()
+                    # Treat any suggested percentage <= 0.00 as zero and remove the row.
+                    if t in pct and pct.get(t, 0.0) > 0.0:
+                        tr.alloc_var.set(f"{pct[t]:.2f}")
+                    else:
+                        # set to 0.00 and schedule removal
+                        tr.alloc_var.set("0.00")
+                        indices_to_remove.append(idx)
+                # Remove zero-weight tickers from highest index to lowest
+                for idx in sorted(indices_to_remove, reverse=True):
+                    if len(self.ticker_rows) > 1:
+                        self._remove_ticker_row(idx)
+                # Ensure allocation label updates and start analysis (bypassing strict entry validation)
+                self._update_alloc_label()
+                # Build tickers and weights from the updated UI grid
+                entries = [(tr.get_values()[0], tr.get_values()[1]) for tr in self.ticker_rows if tr.get_values()[0]]
+                weights_map: Dict[str, float] = {}
+                for t, wstr in entries:
+                    try:
+                        w = float(wstr)
+                    except Exception:
+                        w = 0.0
+                    if w > 0:
+                        weights_map[t] = w / 100.0
+                # Validate dates and rebalance settings before starting analysis
+                rebalance_days = self._parse_rebalance_period()
+                start_dt, end_dt = self._parse_dates()
+                if start_dt is None:
+                    return
+                if self.rebalance_var.get() and rebalance_days is None:
+                    return
+                # Start the analysis worker with the current, applied allocations
+                benchmark_ticker = None
+                if getattr(self, "benchmark_var", None) and self.benchmark_var.get():
+                    benchmark_ticker = self.benchmark_ticker_var.get().strip().upper() or None
+                self._start_analysis_worker(list(weights_map.keys()), weights_map, start_dt, end_dt, rebalance_days, benchmark_ticker)
     def _render_stats_text(self) -> None:
         """Render the statistics tab as a structured, table-like report."""
         self.stats_text.config(state="normal")
@@ -764,18 +1151,53 @@ class PortfolioApp:
             "dim",
         )
 
-        section("Ticker Comparison")
+        section("Stock Comparison")
+        label_w = 12
+        ret_w = 10
+        cagr_w = 10
+        vol_w = 10
+        maxdd_w = 10
+        longest_w = 12
+        sharpe_w = 8
+        win_w = 8
+        var_w = 9
         header = (
-            f"{'Ticker':<8} {'Return':>10} {'CAGR*':>10} {'Vol*':>10} "
-            f"{'Max DD':>10} {'Sharpe*':>8} {'Win':>8} {'VaR95*':>9}"
+            f"{'Ticker':<{label_w}} {'Return':>{ret_w}} {'CAGR*':>{cagr_w}} {'Vol*':>{vol_w}} "
+            f"{'Max DD':>{maxdd_w}} {'Longest UW':>{longest_w}} {'Sharpe*':>{sharpe_w}} {'Win':>{win_w}} {'VaR95*':>{var_w}}"
         )
         write(header, "dim")
         write("-" * len(header), "dim")
+
+        # Prepare benchmark stats if a benchmark is selected and it's not one of the portfolio tickers
+        tickers = list(self.analytics.price_df.columns)
+        bench_stats = None
+        bench_ticker = getattr(self, "benchmark_ticker", None)
+        if getattr(self, "benchmark_prices", None) is not None and bench_ticker and bench_ticker not in tickers:
+            try:
+                aligned = self.benchmark_prices.reindex(self.analytics.price_df.index).dropna()
+                if len(aligned) >= 2:
+                    bench_vs = aligned / aligned.iloc[0]
+                    bench_stats = PortfolioAnalytics._return_stats(bench_vs, PortfolioAnalytics.RISK_FREE_RATE)
+            except Exception:
+                bench_stats = None
+
         for ticker, ts in self.latest_ticker_stats.items():
+            longest_uw = f"{ts.get('longest_drawdown_days', 0)}d"
             write(
-                f"{ticker:<8} {pct(ts['total_return']):>10} {pct(ts['cagr']):>10} "
-                f"{pct(ts['volatility'], signed=False):>10} {pct(ts['max_drawdown']):>10} "
-                f"{num(ts['sharpe']):>8} {pct(ts['win_rate'], signed=False):>8} {pct(ts['var_95']):>9}"
+                f"{ticker:<{label_w}} {pct(ts['total_return']):>{ret_w}} {pct(ts['cagr']):>{cagr_w}} "
+                f"{pct(ts['volatility'], signed=False):>{vol_w}} {pct(ts['max_drawdown']):>{maxdd_w}} {longest_uw:>{longest_w}} "
+                f"{num(ts['sharpe']):>{sharpe_w}} {pct(ts['win_rate'], signed=False):>{win_w}} {pct(ts['var_95']):>{var_w}}"
+            )
+
+        # If benchmark stats are available and benchmark is external to portfolio, show it once after portfolio tickers
+        if bench_stats is not None:
+            write("")
+            b_longest = f"{bench_stats.get('longest_drawdown_days', 0)}d"
+            bench_label = f"{bench_ticker} (bench)"
+            write(
+                f"{bench_label:<{label_w}} {pct(bench_stats['total_return']):>{ret_w}} {pct(bench_stats['cagr']):>{cagr_w}} "
+                f"{pct(bench_stats['volatility'], signed=False):>{vol_w}} {pct(bench_stats['max_drawdown']):>{maxdd_w}} {b_longest:>{longest_w}} "
+                f"{num(bench_stats['sharpe']):>{sharpe_w}} {pct(bench_stats['win_rate'], signed=False):>{win_w}} {pct(bench_stats['var_95']):>{var_w}}"
             )
 
         tickers = list(self.analytics.returns_df.columns)
@@ -861,7 +1283,7 @@ class PortfolioApp:
             self.stats_text.grid_remove()
             self.canvas_widget.grid()
             if view == "portfolio":
-                charts.draw_portfolio_chart(self.fig, self.analytics)
+                charts.draw_portfolio_chart(self.fig, self.analytics, getattr(self, "benchmark_prices", None), getattr(self, "benchmark_ticker", None))
             else:
                 charts.draw_individual_chart(self.fig, self.analytics, view)
             self.canvas.draw()
