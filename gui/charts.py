@@ -54,11 +54,19 @@ def draw_placeholder(fig: Figure) -> None:
     ax.set_yticks([])
 
 
-def draw_portfolio_chart(fig: Figure, analytics: PortfolioAnalytics) -> None:
+from typing import Optional
+import pandas as pd
+
+def draw_portfolio_chart(
+    fig: Figure,
+    analytics: PortfolioAnalytics,
+    benchmark: Optional[pd.Series] = None,
+    benchmark_ticker: Optional[str] = None,
+) -> None:
     """
     Plot the combined portfolio value with a drawdown sub-panel.
 
-    Layout: top 75 % = cumulative return line, bottom 25 % = drawdown fill.
+    Optionally overlay a benchmark series as a dashed, normalized line.
     """
     pv = analytics.portfolio_value
     fig.clear()
@@ -70,12 +78,38 @@ def draw_portfolio_chart(fig: Figure, analytics: PortfolioAnalytics) -> None:
     for ax in (ax1, ax2):
         style_axes(ax)
 
+    # Portfolio line
     ax1.plot(
         pv.index, pv.values,
         color=PALETTE["accent"],
         linewidth=1.8,
         zorder=3,
     )
+
+    # Optional benchmark (dashed)
+    if benchmark is not None and not benchmark.empty:
+        try:
+            b = benchmark.reindex(pv.index).ffill().bfill()
+            if not b.empty and b.isnull().sum() < len(b):
+                b_norm = b / b.iloc[0]
+                ax1.plot(
+                    b_norm.index,
+                    b_norm.values,
+                    color=PALETTE["accent2"],
+                    linewidth=1.4,
+                    linestyle="--",
+                    zorder=2,
+                    label=benchmark_ticker or "Benchmark",
+                )
+                # Draw legend and ensure text is visible on dark background
+                legend = ax1.legend(frameon=False, loc="upper left", fontsize=9)
+                try:
+                    for text in legend.get_texts():
+                        text.set_color(PALETTE["text"])
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     # Shaded fill above / below the 1.0 baseline
     ax1.fill_between(
