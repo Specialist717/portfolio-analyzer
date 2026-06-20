@@ -204,21 +204,24 @@ class PortfolioAnalytics:
         drawdown_series = (value_series - rolling_max) / rolling_max
 
         volatility = returns.std() * np.sqrt(252)
-        daily_rf = risk_free_rate / 252
+        # Convert annual risk-free rate to a per-trading-day rate using discrete compounding
+        # (more precise than simple division for non-negligible rates).
+        daily_rf = (1.0 + risk_free_rate) ** (1.0 / 252.0) - 1.0
         excess = returns - daily_rf
         excess_std = excess.std()
         sharpe = (
-            excess.mean() / excess_std * np.sqrt(252)
+            (excess.mean() / excess_std) * np.sqrt(252)
             if excess_std > 0
             else 0.0
         )
 
+        # Sortino: downside deviation computed on excess returns (below daily_rf)
         downside = excess[excess < 0]
         downside_std = downside.std() * np.sqrt(252)
         if not np.isfinite(downside_std):
             downside_std = 0.0
         sortino = (
-            (returns.mean() - daily_rf) * 252 / downside_std
+            ((returns.mean() - daily_rf) * 252.0) / downside_std
             if downside_std > 0
             else 0.0
         )
@@ -311,11 +314,17 @@ class PortfolioAnalytics:
     ) -> Dict:
         """
         Monte-Carlo Markowitz-style optimizer that searches for portfolio weights
-        maximizing the Sharpe ratio subject to constraints. When allow_short is False
-        weights are constrained to be non-negative and sum to 1 (no shorting).
+        maximizing the Sharpe ratio subject to constraints.
 
-        Returns a dict with keys: weights (ticker->float), expected_annual_return,
-        annual_volatility, sharpe, num_portfolios.
+        Notes:
+        - When allow_short is False weights are constrained to be non-negative and sum to 1 (no shorting).
+        - This implementation uses randomized sampling (Dirichlet for long-only). Results are stochastic;
+          pass a fixed seed for reproducible outcomes. For stable/production use a deterministic
+          quadratic-programming solver with covariance shrinkage (e.g. Ledoit-Wolf) is recommended.
+
+        Returns:
+            dict with keys: weights (ticker->float), expected_annual_return,
+            annual_volatility, sharpe, num_portfolios.
         """
         prices_df = self.price_df
         returns = self.returns_df
