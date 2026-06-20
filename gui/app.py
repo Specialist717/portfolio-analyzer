@@ -54,6 +54,13 @@ class PortfolioApp:
         self.root.title("Portfolio Analyzer")
         self.root.configure(bg=PALETTE["bg"])
         self.root.minsize(1050, 680)
+
+        self.root.update_idletasks()
+        w, h = 1280, 780
+        x = (self.root.winfo_screenwidth() - w) // 2
+        y = (self.root.winfo_screenheight() - h) // 2
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
+
         self.root.update_idletasks()
         w, h = 1280, 780
         x = (self.root.winfo_screenwidth() - w) // 2
@@ -798,9 +805,66 @@ class PortfolioApp:
         self.max_btn.config(state="normal")
         self.status_var.set("✔ Analysis complete")
 
-        # Store optional benchmark
+        # Reflect the actual date range used by the analysis in the UI date fields.
+        # This ensures the left-hand date selectors show the common date window when
+        # newly-added tickers shorten the available history.
+        try:
+            # analytics.price_df index contains pandas.Timestamp values
+            actual_start = self.analytics.price_df.index[0].date()
+            actual_end = self.analytics.price_df.index[-1].date()
+            self.start_var.set(actual_start.strftime("%Y-%m-%d"))
+            self.end_var.set(actual_end.strftime("%Y-%m-%d"))
+            self.inception_date = actual_start
+            self.inception_label.config(text=f"Earliest data: {actual_start.strftime('%b %d, %Y')}")
+        except Exception:
+            # Do not break the UI if indexing fails for any reason
+            pass
+
+        # Store optional benchmark (may be None). If the user has the benchmark checkbox enabled
+        # but the run-analysis path did not provide a series, attempt an explicit fetch so the UI
+        # reflects the requested benchmark without requiring the user to toggle the checkbox.
         self.benchmark_prices = benchmark_series
         self.benchmark_ticker = benchmark_ticker
+
+        # If the user requested a benchmark and it wasn't provided by the analysis worker,
+        # try to fetch it explicitly (or reuse a series included in the portfolio prices).
+        if getattr(self, "benchmark_var", None) and self.benchmark_var.get():
+            # Prefer the ticker returned by the analysis worker, fall back to the UI entry.
+            bt = benchmark_ticker or (self.benchmark_ticker_var.get().strip().upper() or None)
+            if bt and self.benchmark_prices is None:
+                try:
+                    # If the benchmark is one of the portfolio tickers, reuse that series.
+                    if bt in self.analytics.prices:
+                        self.benchmark_prices = self.analytics.prices.get(bt)
+                        self.benchmark_ticker = bt
+                        self.status_var.set("✔ Benchmark loaded")
+                    else:
+                        # Fetch benchmark in the background so the UI doesn't block.
+                        self.status_var.set("⏳ Fetching benchmark …")
+                        self.run_btn.config(state="disabled")
+                        try:
+                            self.optimize_btn.config(state="disabled")
+                        except Exception:
+                            pass
+
+                        def bench_worker():
+                            try:
+                                bprices, bfailed = DataFetcher.fetch_prices(
+                                    [bt],
+                                    start=self.start_var.get(),
+                                    end=self.end_var.get(),
+                                )
+                                series = bprices.get(bt)
+                                failed_b = bfailed
+                            except Exception:
+                                series = None
+                                failed_b = [bt]
+                            self.root.after(0, lambda: self._on_benchmark_fetched(series, bt if series is not None else None, failed_b))
+
+                        threading.Thread(target=bench_worker, daemon=True).start()
+                except Exception:
+                    # Ensure benchmark-fetch errors don't break analysis UI
+                    pass
 
         # Update UI: if some portfolio tickers failed, remove them and reflect the normalized weights
         if failed:

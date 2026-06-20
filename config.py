@@ -7,7 +7,6 @@ REQUIRED_PACKAGES: dict[str, str] = {
     "matplotlib": "matplotlib",
     "numpy":      "numpy",
     "mplcursors": "mplcursors",
-    "PIL":         "Pillow",
 }
 
 PALETTE: dict[str, str] = {
