@@ -7,9 +7,12 @@ call canvas.draw() after the selected chart has been rendered.
 
 from __future__ import annotations
 
+from typing import Optional
+
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import mplcursors
+import pandas as pd
 from matplotlib.figure import Figure
 
 from analytics import PortfolioAnalytics
@@ -53,9 +56,6 @@ def draw_placeholder(fig: Figure) -> None:
     ax.set_xticks([])
     ax.set_yticks([])
 
-
-from typing import Optional
-import pandas as pd
 
 def draw_portfolio_chart(
     fig: Figure,

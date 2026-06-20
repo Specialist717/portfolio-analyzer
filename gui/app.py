@@ -1,4 +1,12 @@
-"""Tkinter user interface for entering portfolios and viewing analysis."""
+"""Tkinter user interface for entering portfolios and viewing analysis.
+
+The PortfolioApp class manages:
+- Portfolio input grid (tickers + allocation percentages)
+- Date range selection and data fetching
+- Portfolio analysis (statistics, charting, rebalancing)
+- Markowitz optimization (Monte-Carlo long-only)
+- Optional benchmark overlay on performance charts
+"""
 
 from __future__ import annotations
 
@@ -54,12 +62,6 @@ class PortfolioApp:
         self.root.title("Portfolio Analyzer")
         self.root.configure(bg=PALETTE["bg"])
         self.root.minsize(1050, 680)
-
-        self.root.update_idletasks()
-        w, h = 1280, 780
-        x = (self.root.winfo_screenwidth() - w) // 2
-        y = (self.root.winfo_screenheight() - h) // 2
-        self.root.geometry(f"{w}x{h}+{x}+{y}")
 
         self.root.update_idletasks()
         w, h = 1280, 780
@@ -303,11 +305,6 @@ class PortfolioApp:
             bd=0, cursor="hand2", font=("Segoe UI", 11), pady=8,
         )
         self.optimize_btn.grid(row=0, column=0, sticky="ew")
-        # Ensure optimize button is enabled by default (guard against state leftover from other flows)
-        try:
-            self.optimize_btn.config(state="normal")
-        except Exception:
-            pass
 
         self.run_btn = tk.Button(
             actions_frame, text="▶  RUN ANALYSIS",

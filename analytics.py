@@ -3,6 +3,17 @@ Portfolio analytics engine.
 
 This module contains pure computation only: it receives price series and
 weights, then produces a normalized portfolio path and risk/return metrics.
+
+All statistics are computed using standard financial formulas:
+- Returns: daily percent changes, annualized by multiplying by 252.
+- Volatility: standard deviation of daily returns, annualized by sqrt(252).
+- Sharpe ratio: (mean excess return) / (std excess return) * sqrt(252),
+  where excess return = daily return - daily risk-free rate.
+- Sortino ratio: annualized excess return / annualized downside volatility.
+- Max drawdown: maximum decline from a prior peak to a subsequent trough.
+- Calmar ratio: CAGR / abs(max drawdown).
+- VaR 95%: 5th percentile of daily returns (historical method).
+- CVaR 95%: conditional value-at-risk, mean of returns <= VaR 95%.
 """
 
 from __future__ import annotations
@@ -180,7 +191,18 @@ class PortfolioAnalytics:
         value_series: pd.Series,
         risk_free_rate: float,
     ) -> Dict:
-        """Compute reusable return/risk statistics for a value series."""
+        """
+        Compute reusable return/risk statistics for a value series.
+
+        Parameters
+        ----------
+        value_series : normalized series (starts at 1.0)
+        risk_free_rate : annual risk-free rate (e.g., 0.04 for 4%)
+
+        Returns
+        -------
+        dict with keys: total_return, cagr, volatility, sharpe, sortino, etc.
+        """
         returns = value_series.pct_change().dropna()
         if len(value_series) < 2 or returns.empty:
             raise ValueError(
